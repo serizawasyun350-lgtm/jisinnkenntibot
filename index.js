@@ -43,7 +43,7 @@ const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '1234';
 // ボットの稼働モード管理 ('online' または 'maintenance')
 let botStatusMode = 'online';
 
-// POSTデータ受信用パルサー
+// POSTデータ受信用パーサー
 app.use(express.urlencoded({ extended: true }));
 
 // 簡易Basic認証ミドルウェア
@@ -66,7 +66,7 @@ function checkAuth(req, res, next) {
   return res.status(401).send('パスワードが間違っています。');
 }
 
-// ダッシュボード画面表示
+// ダッシュボード画面表示（1秒自動更新メタタグ付き）
 app.get('/', checkAuth, (req, res) => {
   const memoryUsage = process.memoryUsage();
   const heapUsedMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
@@ -82,6 +82,7 @@ app.get('/', checkAuth, (req, res) => {
   <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta http-equiv="refresh" content="1"> <!-- 1秒ごとに自動更新 -->
       <title>EarthQuickly 統合メトリクス・ダッシュボード</title>
       <style>
           body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
@@ -108,7 +109,7 @@ app.get('/', checkAuth, (req, res) => {
   <body>
       <div class="container">
           <div class="card">
-              <h1>EarthQuickly 1号機 ダッシュボード</h1>
+              <h1>EarthQuickly 1号機 ダッシュボード (1秒自動更新中)</h1>
               <div class="subtitle">パスワード保護済・防災リアルタイム自動配信システム ＆ 統合メトリクス監視</div>
               <div class="center"><div class="status-badge">● ${statusText}</div></div>
 
@@ -160,7 +161,6 @@ app.get('/', checkAuth, (req, res) => {
 
               <div class="center" style="margin-top: 25px;">
                   <a href="/ping" class="btn">Pingヘルスチェック確認 (/ping)</a>
-                  <a href="/" class="btn" style="background: #334155; margin-left: 10px;">ダッシュボード更新</a>
               </div>
           </div>
       </div>
@@ -581,7 +581,7 @@ client.on('interactionCreate', async interaction => {
           { name: '💾 メモリ使用量 (Heap / RSS)', value: `${heapMB} MB / ${totalMB} MB`, inline: false },
           { name: '📊 サーバーキャッシュ数', value: `${client.guilds.cache.size} サーバー`, inline: true },
           { name: '⚙️ ギルド設定マップ数', value: `${guildSettings.size} 件`, inline: true },
-          { name: '🌐 Webサーバー・ダッシュボード', value: `ポート ${PORT} で稼働中 (パスワード保護有効)`, inline: false }
+          { name: '🌐 Webサーバー・ダッシュボード', value: `ポート ${PORT} で稼働中 (1秒自動更新・パスワード保護有効)`, inline: false }
         )
         .setColor(botStatusMode === 'maintenance' ? 0xEAB308 : 0x3B82F6)
         .setTimestamp();
