@@ -1,7 +1,7 @@
 {
-  "name": "discord-massive-dashboard-bot",
+  "name": "earth-quickly-bot",
   "version": "1.0.0",
-  "description": "Discord Bot with 100+ Dashboard metrics, Weather, Earthquake/Tsunami Alerts and 24/7 Web Server",
+  "description": "Discord Bot with 120+ Dashboard Settings, Weather, Earthquake/Tsunami Alerts and 24/7 Web Server",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
