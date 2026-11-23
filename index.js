@@ -40,11 +40,15 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '1234';
 
+// ボットの起動時間を記録
+const startTime = Date.now();
+
 // ボットの稼働モード管理 ('online' または 'maintenance')
 let botStatusMode = 'online';
 
 // POSTデータ受信用パーサー
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
 // 簡易Basic認証ミドルウェア
 function checkAuth(req, res, next) {
@@ -66,104 +70,191 @@ function checkAuth(req, res, next) {
   return res.status(401).send('パスワードが間違っています。');
 }
 
-// ダッシュボード画面表示（1秒自動更新メタタグ付き）
-app.get('/', checkAuth, (req, res) => {
+// 稼働時間をフォーマットする関数
+function formatUptime(ms) {
+  const seconds = Math.floor(ms / 1000);
+  const days = Math.floor(seconds / (3600 * 24));
+  const hours = Math.floor((seconds % (3600 * 24)) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+
+  let result = '';
+  if (days > 0) result += `${days}日 `;
+  if (hours > 0 || days > 0) result += `${hours}時間 `;
+  if (minutes > 0 || hours > 0 || days > 0) result += `${minutes}分 `;
+  result += `${secs}秒`;
+  return result;
+}
+
+// メトリクスデータをJSONで返すAPI（非同期更新用）
+app.get('/api/metrics', checkAuth, (req, res) => {
   const memoryUsage = process.memoryUsage();
   const heapUsedMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
   const heapTotalMB = Math.round(memoryUsage.heapTotal / 1024 / 1024);
   const rssMB = Math.round(memoryUsage.rss / 1024 / 1024);
   const wsPing = client.ws.ping >= 0 ? `${client.ws.ping}ms` : '測定中...';
-  
-  const statusText = botStatusMode === 'maintenance' ? '🟡 点検中 (Maintenance)' : '🟢 オンライン (稼働中)';
+  const uptimeString = formatUptime(Date.now() - startTime);
 
+  res.json({
+    uptime: uptimeString,
+    ping: wsPing,
+    heapUsed: heapUsedMB,
+    heapTotal: heapTotalMB,
+    rss: rssMB,
+    statusMode: botStatusMode,
+    logs: logBuffer.length > 0 ? logBuffer.join('<br>') : '[システム] ログはまだ記録されていません。'
+  });
+});
+
+// ダッシュボード画面表示（読み込みマークなしの非同期1秒更新対応）
+app.get('/', checkAuth, (req, res) => {
   res.send(`
   <!DOCTYPE html>
   <html lang="ja">
   <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta http-equiv="refresh" content="1"> <!-- 1秒ごとに自動更新 -->
       <title>EarthQuickly 統合メトリクス・ダッシュボード</title>
       <style>
-          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
-          .container { max-width: 1100px; margin: 0 auto; }
-          .card { background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid #334155; margin-bottom: 20px; }
-          h1 { color: #38bdf8; font-size: 24px; margin-bottom: 5px; text-align: center; }
-          .subtitle { text-align: center; color: #94a3b8; font-size: 14px; margin-bottom: 20px; }
-          .status-badge { display: inline-block; padding: 6px 14px; background: ${botStatusMode === 'maintenance' ? '#854d0e' : '#065f46'}; color: ${botStatusMode === 'maintenance' ? '#fde047' : '#34d399'}; border-radius: 20px; font-weight: bold; font-size: 14px; }
-          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px; }
-          .metric-box { background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid #334155; text-align: center; }
-          .metric-box h3 { margin: 0 0 8px 0; color: #94a3b8; font-size: 13px; }
-          .metric-box .value { font-size: 20px; font-weight: bold; color: #38bdf8; }
-          .services-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-          .services-table th, .services-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #334155; font-size: 13px; }
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 10px; }
+          .container { width: 100%; max-width: 1100px; margin: 0 auto; box-sizing: border-box; }
+          .card { background: #1e293b; padding: 15px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid #334155; margin-bottom: 20px; box-sizing: border-box; }
+          h1 { color: #38bdf8; font-size: 20px; margin-bottom: 5px; text-align: center; }
+          .subtitle { text-align: center; color: #94a3b8; font-size: 12px; margin-bottom: 15px; }
+          .status-badge { display: inline-block; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 13px; }
+          
+          .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 15px; }
+          .metric-box { background: #0f172a; padding: 12px; border-radius: 8px; border: 1px solid #334155; text-align: center; box-sizing: border-box; }
+          .metric-box h3 { margin: 0 0 6px 0; color: #94a3b8; font-size: 12px; }
+          .metric-box .value { font-size: 16px; font-weight: bold; color: #38bdf8; word-break: break-all; }
+          
+          .table-responsive { width: 100%; overflow-x: auto; }
+          .services-table { width: 100%; border-collapse: collapse; margin-top: 10px; min-width: 450px; }
+          .services-table th, .services-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #334155; font-size: 12px; }
           .services-table th { color: #94a3b8; background: #0f172a; }
+          
           .badge-ok { color: #34d399; font-weight: bold; }
           .badge-maint { color: #fde047; font-weight: bold; }
-          .logs-container { background: #090d16; padding: 15px; border-radius: 8px; border: 1px solid #334155; font-family: monospace; font-size: 12px; max-height: 220px; overflow-y: auto; color: #38bdf8; }
-          .btn { display: inline-block; background: #0284c7; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; transition: background 0.2s; text-align: center; border: none; cursor: pointer; }
+          
+          .logs-container { background: #090d16; padding: 10px; border-radius: 8px; border: 1px solid #334155; font-family: monospace; font-size: 11px; max-height: 200px; overflow-y: auto; color: #38bdf8; word-break: break-all; }
+          .btn { display: inline-block; background: #0284c7; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: bold; transition: background 0.2s; text-align: center; border: none; cursor: pointer; font-size: 13px; }
           .btn:hover { background: #0369a1; }
           .center { text-align: center; }
+
+          @media (min-width: 768px) {
+              body { padding: 20px; }
+              .card { padding: 25px; }
+              h1 { font-size: 24px; }
+              .subtitle { font-size: 14px; }
+              .metric-box .value { font-size: 20px; }
+              .services-table th, .services-table td { font-size: 13px; padding: 10px 12px; }
+              .logs-container { font-size: 12px; }
+          }
       </style>
   </head>
   <body>
       <div class="container">
           <div class="card">
-              <h1>EarthQuickly 1号機 ダッシュボード (1秒自動更新中)</h1>
-              <div class="subtitle">パスワード保護済・防災リアルタイム自動配信システム ＆ 統合メトリクス監視</div>
-              <div class="center"><div class="status-badge">● ${statusText}</div></div>
+              <h1>EarthQuickly 1号機 ダッシュボード</h1>
+              <div class="subtitle">パスワード保護済・読み込みマークなしリアルタイム更新</div>
+              <div class="center"><div id="statusBadge" class="status-badge">読み込み中...</div></div>
 
-              <!-- ダッシュボードからのステータス切替フォーム -->
-              <div style="margin-top: 20px; padding: 15px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; display: flex; justify-content: space-between; align-items: center;">
-                  <span style="font-size: 14px; font-weight: bold; color: #38bdf8;">⚙️ Webからのステータス切替</span>
-                  <form action="/set-mode" method="POST" style="display: flex; gap: 10px; align-items: center; margin: 0;">
-                      <select name="mode" style="background: #1e293b; color: #f8fafc; padding: 8px; border-radius: 6px; border: 1px solid #334155;">
-                          <option value="online" ${botStatusMode === 'online' ? 'selected' : ''}>🟢 オンライン (稼働中)</option>
-                          <option value="maintenance" ${botStatusMode === 'maintenance' ? 'selected' : ''}>🟡 点検中 (Maintenance)</option>
+              <div style="margin-top: 15px; padding: 12px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center;">
+                  <span style="font-size: 13px; font-weight: bold; color: #38bdf8;">⚙️ ステータス切替</span>
+                  <form action="/set-mode" method="POST" style="display: flex; gap: 8px; align-items: center; margin: 0; width: 100%; max-width: 300px;">
+                      <select id="modeSelect" name="mode" style="background: #1e293b; color: #f8fafc; padding: 6px; border-radius: 6px; border: 1px solid #334155; flex: 1; font-size: 12px;">
+                          <option value="online">🟢 オンライン (稼働中)</option>
+                          <option value="maintenance">🟡 点検中 (Maintenance)</option>
                       </select>
-                      <button type="submit" class="btn" style="padding: 8px 15px; font-size: 13px;">適用</button>
+                      <button type="submit" class="btn" style="padding: 6px 12px;">適用</button>
                   </form>
               </div>
 
-              <div class="grid" style="margin-top: 20px;">
+              <div class="grid" style="margin-top: 15px;">
+                  <div class="metric-box">
+                      <h3>連続稼働時間 (Uptime)</h3>
+                      <div id="valUptime" class="value" style="color: #34d399; font-size: 15px;">-</div>
+                  </div>
                   <div class="metric-box">
                       <h3>WebSocket Ping</h3>
-                      <div class="value">${wsPing}</div>
+                      <div id="valPing" class="value">-</div>
                   </div>
                   <div class="metric-box">
                       <h3>ヒープメモリ (使用量)</h3>
-                      <div class="value">${heapUsedMB} MB / ${heapTotalMB} MB</div>
+                      <div id="valHeap" class="value">-</div>
                   </div>
                   <div class="metric-box">
                       <h3>RSS (総メモリ消費)</h3>
-                      <div class="value">${rssMB} MB</div>
-                  </div>
-                  <div class="metric-box">
-                      <h3>API平均レスポンス</h3>
-                      <div class="value">~45ms (正常)</div>
+                      <div id="valRss" class="value">-</div>
                   </div>
               </div>
 
-              <h2 style="font-size: 16px; color: #38bdf8; margin-top: 25px;">🔌 各種サービス稼働状態</h2>
-              <table class="services-table">
-                  <tr><th>サービス名</th><th>接続先 / エンドポイント</th><th>ステータス</th></tr>
-                  <tr><td>Discord Bot Gateway</td><td>wss://gateway.discord.gg</td><td><span class="badge-ok">● 接続正常</span></td></tr>
-                  <tr><td>お天気API (tsukumi)</td><td>weather.tsukumijima.net</td><td><span class="badge-ok">● 稼働中 (応答200)</span></td></tr>
-                  <tr><td>気象庁防災情報API</td><td>www.jma.go.jp/bosai</td><td><span class="badge-ok">● 同期中</span></td></tr>
-                  <tr><td>NHK / Yahoo! ニュースRSS</td><td>www3.nhk.or.jp / news.yahoo.co.jp</td><td><span class="badge-ok">● 取得可能</span></td></tr>
-                  <tr><td>Express Webサーバー</td><td>Port: ${PORT} (認証保護中)</td><td><span class="${botStatusMode === 'maintenance' ? 'badge-maint' : 'badge-ok'}">● ${statusText}</span></td></tr>
-              </table>
-
-              <h2 style="font-size: 16px; color: #38bdf8; margin-top: 25px;">💻 ライブ コンソールログ</h2>
-              <div class="logs-container">
-                  ${logBuffer.length > 0 ? logBuffer.join('<br>') : '[システム] ログはまだ記録されていません。'}
+              <h2 style="font-size: 15px; color: #38bdf8; margin-top: 20px;">🔌 各種サービス稼働状態</h2>
+              <div class="table-responsive">
+                  <table class="services-table">
+                      <tr><th>サービス名</th><th>接続先 / エンドポイント</th><th>ステータス</th></tr>
+                      <tr><td>Discord Bot Gateway</td><td>wss://gateway.discord.gg</td><td><span class="badge-ok">● 接続正常</span></td></tr>
+                      <tr><td>お天気API (tsukumi)</td><td>weather.tsukumijima.net</td><td><span class="badge-ok">● 稼働中 (応答200)</span></td></tr>
+                      <tr><td>気象庁防災情報API</td><td>www.jma.go.jp/bosai</td><td><span class="badge-ok">● 同期中</span></td></tr>
+                      <tr><td>NHK / Yahoo! ニュースRSS</td><td>www3.nhk.or.jp / news.yahoo.co.jp</td><td><span class="badge-ok">● 取得可能</span></td></tr>
+                      <tr><td>Express Webサーバー</td><td>Port: ${PORT} (認証保護中)</td><td><span id="serverStatusBadge" class="badge-ok">● オンライン</span></td></tr>
+                  </table>
               </div>
 
-              <div class="center" style="margin-top: 25px;">
+              <h2 style="font-size: 15px; color: #38bdf8; margin-top: 20px;">💻 ライブ コンソールログ</h2>
+              <div id="logsContainer" class="logs-container">
+                  ログを読み込み中...
+              </div>
+
+              <div class="center" style="margin-top: 20px;">
                   <a href="/ping" class="btn">Pingヘルスチェック確認 (/ping)</a>
               </div>
           </div>
       </div>
+
+      <script>
+          // 1秒ごとに裏側でAPIからデータを取得し、画面の数字だけを書き換える（読み込みマークが点滅しません）
+          async function updateDashboard() {
+              try {
+                  const res = await fetch('/api/metrics');
+                  if (!res.ok) return;
+                  const data = await res.json();
+
+                  document.getElementById('valUptime').innerText = data.uptime;
+                  document.getElementById('valPing').innerText = data.ping;
+                  document.getElementById('valHeap').innerText = data.heapUsed + ' MB / ' + data.heapTotal + ' MB';
+                  document.getElementById('valRss').innerText = data.rss + ' MB';
+
+                  const badge = document.getElementById('statusBadge');
+                  const serverBadge = document.getElementById('serverStatusBadge');
+                  const selectBox = document.getElementById('modeSelect');
+
+                  if (data.statusMode === 'maintenance') {
+                      badge.style.background = '#854d0e';
+                      badge.style.color = '#fde047';
+                      badge.innerText = '● 🟡 点検中 (Maintenance)';
+                      serverBadge.className = 'badge-maint';
+                      serverBadge.innerText = '● 🟡 点検中 (Maintenance)';
+                      if (document.activeElement !== selectBox) selectBox.value = 'maintenance';
+                  } else {
+                      badge.style.background = '#065f46';
+                      badge.style.color = '#34d399';
+                      badge.innerText = '● 🟢 オンライン (稼働中)';
+                      serverBadge.className = 'badge-ok';
+                      serverBadge.innerText = '● 🟢 オンライン (稼働中)';
+                      if (document.activeElement !== selectBox) selectBox.value = 'online';
+                  }
+
+                  document.getElementById('logsContainer').innerHTML = data.logs;
+              } catch (e) {
+                  console.error('更新エラー:', e);
+              }
+          }
+
+          // 初回実行 ＆ 1秒ごとの定期実行
+          updateDashboard();
+          setInterval(updateDashboard, 1000);
+      </script>
   </body>
   </html>
   `);
@@ -184,7 +275,7 @@ app.get('/ping', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Web server & Dashboard (Password: 1234) are running on port ${PORT}`);
+  console.log(`Web server & Dashboard (Async 1s update, No reload icon) are running on port ${PORT}`);
 });
 
 // --- 2. Discord Bot クライアントの設定 ---
@@ -453,7 +544,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('channel')
-    .setDescription('【管理者権限が必要】情報受け取るチャンネルの設定を行います')
+    .setDescription('【管理者権限が必要】情報を受け取るチャンネルの設定を行います')
     .addSubcommand(sub =>
       sub.setName('add')
         .setDescription('実行したチャンネルを登録します')
@@ -570,18 +661,20 @@ client.on('interactionCreate', async interaction => {
       const heapMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
       const totalMB = Math.round(memoryUsage.rss / 1024 / 1024);
       const currentModeText = botStatusMode === 'maintenance' ? '🟡 点検中 (Maintenance)' : '🟢 オンライン (稼働中)';
+      const uptimeStr = formatUptime(Date.now() - startTime);
 
       const embed = new EmbedBuilder()
         .setTitle('🛠️ EarthQuickly デバッグ診断パネル')
         .setDescription('システム全体の稼働状態・メモリ・API接続状況の診断結果です。')
         .addFields(
+          { name: '⏱️ 連続稼働時間', value: uptimeStr, inline: false },
           { name: '⚙️ 現在のステータスモード', value: currentModeText, inline: false },
           { name: '🟢 ボットステータス', value: `接続済み (${client.user.tag})`, inline: true },
           { name: '🏓 WebSocket Ping', value: `${Math.round(client.ws.ping)}ms`, inline: true },
           { name: '💾 メモリ使用量 (Heap / RSS)', value: `${heapMB} MB / ${totalMB} MB`, inline: false },
           { name: '📊 サーバーキャッシュ数', value: `${client.guilds.cache.size} サーバー`, inline: true },
           { name: '⚙️ ギルド設定マップ数', value: `${guildSettings.size} 件`, inline: true },
-          { name: '🌐 Webサーバー・ダッシュボード', value: `ポート ${PORT} で稼働中 (1秒自動更新・パスワード保護有効)`, inline: false }
+          { name: '🌐 Webサーバー・ダッシュボード', value: `ポート ${PORT} で稼働中 (非同期1秒更新・読み込みマークなし)`, inline: false }
         )
         .setColor(botStatusMode === 'maintenance' ? 0xEAB308 : 0x3B82F6)
         .setTimestamp();
