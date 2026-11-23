@@ -1,7 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 const express = require('express');
-const fetch = require('node-fetch');
 
 // --- 1. Express サーバー & HTMLダッシュボードの構築 ---
 const app = express();
@@ -61,9 +60,9 @@ const client = new Client({
   ],
 });
 
-// サーバーごとの設定を保持するメモリ（必要に応じてデータベースに保存してください）
-const alertChannels = new Map(); // サーバーID => チャンネルID
-const alertRoles = new Map();    // サーバーID => ロールID
+// サーバーごとの設定を保持するメモリ
+const alertChannels = new Map();
+const alertRoles = new Map();
 
 // --- 3. スラッシュコマンドの構築（全60個） ---
 const commands = [];
@@ -80,7 +79,6 @@ commands.push(
   new SlashCommandBuilder().setName('news').setDescription('最新の主要ニュースを取得します'),
   new SlashCommandBuilder().setName('alert').setDescription('気象警報や防災アラートの状況を確認します'),
   
-  // 通知チャンネル設定用コマンド
   new SlashCommandBuilder()
     .setName('setalertchannel')
     .setDescription('地震や津波警報を自動通知するチャンネルを設定します')
@@ -91,7 +89,6 @@ commands.push(
         .setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
-  // 通知ロール設定用コマンド
   new SlashCommandBuilder()
     .setName('setalertrole')
     .setDescription('地震や津波警報の通知時にメンションするロールを設定します')
@@ -113,7 +110,7 @@ while (generatedCount < 60) {
   generatedCount++;
 }
 
-// --- 4. 起動時の自動コマンド登録 & 定期自動通知ループ ---
+// --- 4. 起動時の自動コマンド登録 ---
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
 client.once('ready', async () => {
@@ -130,35 +127,6 @@ client.once('ready', async () => {
   }
 
   client.user.setActivity('/地域の天気を見る で天気確認', { type: 0 });
-
-  // --- 地震・津波アラートの自動監視ループ（例: 1分ごと） ---
-  setInterval(async () => {
-    try {
-      // 例: 外部防災APIを fetch で定期チェックする処理
-      // const response = await fetch('https://api.example.com/earthquake');
-      // const data = await response.json();
-      
-      // 重大な警報を検知した場合の自動送信処理イメージ：
-      /*
-      if (data.hasEmergency) {
-        for (const [guildId, channelId] of alertChannels.entries()) {
-          const channel = await client.channels.fetch(channelId).catch(() => null);
-          if (channel) {
-            const roleId = alertRoles.get(guildId);
-            const mentionText = roleId ? `<@&${roleId}>` : '@everyone';
-            
-            channel.send({
-              content: `${mentionText} 【緊急地震速報・津波警報】強い揺れに警戒してください！`,
-              embeds: [/* 詳細Embed */]
-            });
-          }
-        }
-      }
-      */
-    } catch (error) {
-      console.error('自動アラートチェックエラー:', error);
-    }
-  }, 60000);
 });
 
 // --- 5. 時間帯による天気予報の更新ロジック ---
