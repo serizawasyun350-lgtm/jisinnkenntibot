@@ -1,7 +1,7 @@
 {
-  "name": "discord-weather-earthquake-bot",
+  "name": "discord-massive-dashboard-bot",
   "version": "1.0.0",
-  "description": "Multi-function Discord Bot with Weather, Earthquake/Tsunami Alerts, Channel/Role Settings, Embedded Dashboard & 24/7 Web Server",
+  "description": "Discord Bot with 100+ Dashboard metrics, Weather, Earthquake/Tsunami Alerts and 24/7 Web Server",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
