@@ -1,5 +1,18 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
+const {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  EmbedBuilder,
+  PermissionFlagsBits,
+  ChannelType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ComponentType
+} = require('discord.js');
 const express = require('express');
 const fetch = require('node-fetch');
 
@@ -11,7 +24,7 @@ function generate120DashboardItems() {
   let items = '';
   const categories = [
     'システム一般設定', 'JアラートAPI連携', '地震情報API同期', '津波警報API監視',
-    'お天気API(tsukumi)', '線状降水帯API', 'ニュース自動配信', '自動通知キュー',
+    'お天気API(tsukumi)', '線状降水帯API', 'ニュースRSS取得', '自動通知キュー',
     'ロールメンション制御', 'チャンネル権限管理', 'Ping死活監視', 'エラーログ自動収集'
   ];
   
@@ -48,8 +61,8 @@ const dashboardHtml = `
     <div class="container">
         <div class="card">
             <h1>EarthQuickly 1号機 ダッシュボード</h1>
-            <div class="status">● オンライン (各種API連携・全120項目稼働中)</div>
-            <p>ニュース配信、お天気API、地震・津波・JアラートAPI連動、および120個のシステム設定を統合管理しています。</p>
+            <div class="status">● オンライン (最新ニュースRSS・各種API連携・全120項目稼働中)</div>
+            <p>リアルタイムニュース記事取得、お天気API、地震・津波・JアラートAPI連動を統合管理しています。</p>
             <div class="metrics-grid">
                 <ul>
                     ${generate120DashboardItems()}
@@ -114,7 +127,152 @@ const apiTypeChoices = [
   { name: '地震速報フィード', value: 'earthquake_feed' }
 ];
 
-// --- 3. スラッシュコマンドの構築 ---
+const newsCategoryChoices = [
+  { name: '主要ニュース', value: 'main' },
+  { name: '社会・防災ニュース', value: 'society' },
+  { name: '科学・文化・IT', value: 'science' },
+  { name: '政治・経済', value: 'politics' }
+];
+
+// ジャンルごとのプライマリRSS（NHK）＆フォールバックRSS（Yahoo!ニュース）
+const rssSources = {
+  main: [
+    'https://www3.nhk.or.jp/rss/news/cat0.xml',
+    'https://news.yahoo.co.jp/rss/topics/top-picks.xml'
+  ],
+  society: [
+    'https://www3.nhk.or.jp/rss/news/cat1.xml',
+    'https://news.yahoo.co.jp/rss/topics/domestic.xml'
+  ],
+  science: [
+    'https://www3.nhk.or.jp/rss/news/cat3.xml',
+    'https://news.yahoo.co.jp/rss/topics/it.xml'
+  ],
+  politics: [
+    'https://www3.nhk.or.jp/rss/news/cat4.xml',
+    'https://news.yahoo.co.jp/rss/topics/business.xml'
+  ]
+};
+
+// --- 3. 確実取得型の最新ニュースRSSパーサー ---
+function parseXmlItems(xml) {
+  const items = [];
+  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  let match;
+
+  while ((match = itemRegex.exec(xml)) !== null) {
+    const content = match[1];
+
+    const titleMatch = content.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/);
+    const linkMatch = content.match(/<link>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/link>/);
+    const descMatch = content.match(/<description>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/);
+    const dateMatch = content.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+
+    if (titleMatch && linkMatch) {
+      const cleanTitle = titleMatch[1].replace(/<[^>]*>/g, '').trim();
+      const cleanLink = linkMatch[1].replace(/<[^>]*>/g, '').trim();
+      let cleanDesc = descMatch ? descMatch[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() : '';
+      if (cleanDesc.length > 75) {
+        cleanDesc = cleanDesc.slice(0, 75) + '...';
+      }
+
+      const rawDate = dateMatch ? dateMatch[1].trim() : '';
+      const timestamp = rawDate ? Date.parse(rawDate) : 0;
+      const formattedDate = timestamp
+        ? new Date(timestamp).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })
+        : '最新';
+
+      items.push({
+        title: cleanTitle,
+        link: cleanLink,
+        description: cleanDesc || '詳細はリンク先から確認できます。',
+        pubDate: formattedDate,
+        timestamp: isNaN(timestamp) ? 0 : timestamp
+      });
+    }
+  }
+
+  // 公開日時が新しい順（最新順）にソート
+  items.sort((a, b) => b.timestamp - a.timestamp);
+  return items.slice(0, 20);
+}
+
+async function fetchLatestNews(categoryKey) {
+  const urls = rssSources[categoryKey] || rssSources.main;
+
+  for (const url of urls) {
+    try {
+      // キャッシュ回避用のタイムスタンプ付与＆User-Agent指定
+      const fetchUrl = `${url}?_t=${Date.now()}`;
+      const res = await fetch(fetchUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8'
+        },
+        timeout: 8000
+      });
+
+      if (!res.ok) {
+        console.warn(`RSS取得スキップ (${res.status}): ${url}`);
+        continue;
+      }
+
+      const xml = await res.text();
+      const parsed = parseXmlItems(xml);
+      if (parsed.length > 0) {
+        return parsed;
+      }
+    } catch (err) {
+      console.warn(`RSS通信エラー (${url}):`, err.message);
+    }
+  }
+
+  throw new Error('すべてのニュースRSSソースからの取得に失敗しました');
+}
+
+function buildNewsPage(articles, page, perPage = 5) {
+  const totalPages = Math.ceil(articles.length / perPage);
+  const start = page * perPage;
+  const currentArticles = articles.slice(start, start + perPage);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📰 最新ニュース速報一覧 (${page + 1} / ${totalPages} ページ)`)
+    .setDescription('下の `<` `>` ボタンで前後の最新ニュースに切り替えられます。')
+    .setColor(0x3498DB)
+    .setFooter({ text: `全 ${articles.length} 件の最新記事を取得済み` })
+    .setTimestamp();
+
+  currentArticles.forEach((art, idx) => {
+    const globalIndex = start + idx + 1;
+    embed.addFields({
+      name: `${globalIndex}. ${art.title}`,
+      value: `${art.description}\n🔗 [記事全文を読む](${art.link}) (${art.pubDate})`,
+      inline: false
+    });
+  });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('news_prev')
+      .setLabel('<')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(page === 0),
+    new ButtonBuilder()
+      .setCustomId('news_page_info')
+      .setLabel(`${page + 1} / ${totalPages}`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true),
+    new ButtonBuilder()
+      .setCustomId('news_next')
+      .setLabel('>')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(page >= totalPages - 1)
+  );
+
+  return { embed, row, totalPages };
+}
+
+// --- 4. スラッシュコマンドの構築 ---
 const commands = [
   new SlashCommandBuilder()
     .setName('jyouhoutouroku')
@@ -150,10 +308,23 @@ const commands = [
     .addStringOption(option => option.setName('地方').setDescription('地方グループ').setRequired(true).addChoices(...regionChoices))
     .addStringOption(option => option.setName('県').setDescription('都道府県名').setRequired(true)),
 
-  // ニュース確認コマンド
   new SlashCommandBuilder()
     .setName('news')
-    .setDescription('最新の主要ニュースおよび防災速報を確認します'),
+    .setDescription('最新のニュース記事一覧（< > ボタン切り替え付き）を閲覧します')
+    .addStringOption(option =>
+      option.setName('ジャンル')
+        .setDescription('閲覧したいニュースのジャンル（省略時は主要ニュース）')
+        .setRequired(false)
+        .addChoices(...newsCategoryChoices)),
+
+  new SlashCommandBuilder()
+    .setName('にゅうす')
+    .setDescription('最新のニュース記事一覧（< > ボタン切り替え付き）を閲覧します')
+    .addStringOption(option =>
+      option.setName('ジャンル')
+        .setDescription('閲覧したいニュースのジャンル（省略時は主要ニュース）')
+        .setRequired(false)
+        .addChoices(...newsCategoryChoices)),
 
   new SlashCommandBuilder()
     .setName('add_mention')
@@ -202,7 +373,7 @@ const commands = [
   new SlashCommandBuilder().setName('help').setDescription('ヘルプを表示します')
 ];
 
-// --- 4. 起動時の自動コマンド登録 ---
+// --- 5. 起動時の自動コマンド登録 ---
 client.once('ready', async () => {
   console.log(`ログインしました: ${client.user.tag}`);
   try {
@@ -218,7 +389,7 @@ client.once('ready', async () => {
   client.user.setActivity('/help でコマンド確認', { type: 0 });
 });
 
-// --- 5. インタラクション処理 ---
+// --- 6. インタラクション処理 ---
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -234,7 +405,6 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply({ content: `✅ ${channel} に **[ ${type} ]** の通知を登録しました！`, ephemeral: true });
     }
     else if (commandName === 'お天気確認') {
-      const regionGroup = interaction.options.getString('地方');
       const prefecture = interaction.options.getString('県');
       await interaction.deferReply();
 
@@ -283,19 +453,63 @@ client.on('interactionCreate', async interaction => {
         .setTimestamp();
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
-    // ニュース確認コマンドの実装
-    else if (commandName === 'news') {
-      const embed = new EmbedBuilder()
-        .setTitle('📰 本日の重要ニュース・防災速報')
-        .setDescription('国内外の主要なニュースおよび気象庁発信の防災情報をお伝えします。')
-        .addFields(
-          { name: '🌐 社会・インフラ', value: '各地の交通機関やライフラインは平常通り稼働しています。', inline: false },
-          { name: '⚠️ 防災・気象注意報', value: '最新の気象情報に注意し、日頃からの備えを確認してください。', inline: false },
-          { name: '💡 テクノロジー', value: '自動24時間監視システムおよび各APIとの通信は安定しています。', inline: false }
-        )
-        .setColor(0x3498DB)
-        .setTimestamp();
-      await interaction.reply({ embeds: [embed] });
+    // 最新ニュース記事一覧（< > ボタンUIによるページ切り替え対応）
+    else if (commandName === 'news' || commandName === 'にゅうす') {
+      const categoryKey = interaction.options.getString('ジャンル') || 'main';
+      await interaction.deferReply();
+
+      try {
+        const articles = await fetchLatestNews(categoryKey);
+        if (!articles || articles.length === 0) {
+          await interaction.editReply({ content: '📰 現在取得できる最新ニュースが見つかりませんでした。' });
+          return;
+        }
+
+        let currentPage = 0;
+        const { embed, row, totalPages } = buildNewsPage(articles, currentPage);
+
+        const message = await interaction.editReply({
+          embeds: [embed],
+          components: [row]
+        });
+
+        const collector = message.createMessageComponentCollector({
+          componentType: ComponentType.Button,
+          time: 180000
+        });
+
+        collector.on('collect', async i => {
+          if (i.user.id !== interaction.user.id) {
+            await i.reply({ content: '⚠️ このボタンはコマンドを実行した本人のみ操作できます。', ephemeral: true });
+            return;
+          }
+
+          if (i.customId === 'news_prev' && currentPage > 0) {
+            currentPage--;
+          } else if (i.customId === 'news_next' && currentPage < totalPages - 1) {
+            currentPage++;
+          }
+
+          const updated = buildNewsPage(articles, currentPage);
+          await i.update({
+            embeds: [updated.embed],
+            components: [updated.row]
+          });
+        });
+
+        collector.on('end', async () => {
+          const disabledRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('news_prev').setLabel('<').setStyle(ButtonStyle.Secondary).setDisabled(true),
+            new ButtonBuilder().setCustomId('news_page_info').setLabel(`${currentPage + 1} / ${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true),
+            new ButtonBuilder().setCustomId('news_next').setLabel('>').setStyle(ButtonStyle.Secondary).setDisabled(true)
+          );
+          await interaction.editReply({ components: [disabledRow] }).catch(() => {});
+        });
+
+      } catch (err) {
+        console.error('ニュース取得エラー:', err);
+        await interaction.editReply({ content: '⚠️ 最新ニュースの取得中にエラーが発生しました。少し時間をおいてから再度お試しください。' });
+      }
     }
     else if (commandName === 'add_mention') {
       const type = interaction.options.getString('type');
@@ -367,7 +581,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply(`🏓 Pong! 応答速度: ${latency}ms`);
     }
     else if (commandName === 'help') {
-      await interaction.reply({ content: '📌 利用可能なコマンド: /news, /お天気確認, /地震情報, /確認コマンド, /jyouhoutouroku 等', ephemeral: true });
+      await interaction.reply({ content: '📌 利用可能なコマンド: /news (/にゅうす), /お天気確認, /地震情報, /確認コマンド, /jyouhoutouroku 等', ephemeral: true });
     }
   } catch (err) {
     console.error('コマンド実行エラー:', err);
