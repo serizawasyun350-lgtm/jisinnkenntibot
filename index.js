@@ -84,16 +84,33 @@ const client = new Client({
   ],
 });
 
-// サーバーごとの登録情報を保持するメモリ
-const registeredInfoChannels = new Map(); // guildId => { channelId, infoTypes }
-const alertRoles = new Map();
-const shindoFilters = new Map();
+// サーバーごとの詳細設定を保持するメモリ
+// 構造例: guildId => { earthquake: { channelId, roleId, shindo }, tsunami: { ... } }
+const guildSettings = new Map();
+
+function getGuildConfig(guildId) {
+  if (!guildSettings.has(guildId)) {
+    guildSettings.set(guildId, {});
+  }
+  return guildSettings.get(guildId);
+}
+
+// 共通の「情報種別 (type)」選択肢
+const infoTypeChoices = [
+  { name: '地震情報', value: '地震情報' },
+  { name: '緊急地震速報', value: '緊急地震速報' },
+  { name: '津波情報', value: '津波情報' },
+  { name: '天気予報 [18:00 / 6:00 / 12:00]', value: '天気予報' },
+  { name: '線状降水帯', value: '線状降水帯' },
+  { name: 'にゅうす', value: 'にゅうす' }
+];
 
 // --- 3. スラッシュコマンドの構築 ---
 const commands = [
+  // /jyouhoutouroku
   new SlashCommandBuilder()
     .setName('jyouhoutouroku')
-    .setDescription('指定したチャンネルに地震・津波・天気予報などの各種情報を登録します')
+    .setDescription('指定したチャンネルに各種情報を登録します')
     .addChannelOption(option =>
       option.setName('登録チャンネル')
         .setDescription('通知を受け取るテキストチャンネル')
@@ -103,67 +120,105 @@ const commands = [
       option.setName('何を登録するか')
         .setDescription('登録する情報の種類')
         .setRequired(true)
+        .addChoices(...infoTypeChoices))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  // /add_mention [type] [roles]
+  new SlashCommandBuilder()
+    .setName('add_mention')
+    .setDescription('【管理者権限が必要】情報送信時にメンションするロールを追加します')
+    .addStringOption(option =>
+      option.setName('type')
+        .setDescription('対象の情報種別')
+        .setRequired(true)
+        .addChoices(...infoTypeChoices))
+    .addRoleOption(option =>
+      option.setName('roles')
+        .setDescription('メンションするロール')
+        .setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  // /del_mention [type]
+  new SlashCommandBuilder()
+    .setName('del_mention')
+    .setDescription('【管理者権限が必要】情報送信時にメンションする設定を解除します')
+    .addStringOption(option =>
+      option.setName('type')
+        .setDescription('解除する情報種別')
+        .setRequired(true)
+        .addChoices(...infoTypeChoices))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  // /channel add [type] & /channel del [type]
+  new SlashCommandBuilder()
+    .setName('channel')
+    .setDescription('【管理者権限が必要】情報を受け取るチャンネルの設定を行います')
+    .addSubcommand(sub =>
+      sub.setName('add')
+        .setDescription('実行したチャンネルを、情報を受け取るチャンネルとして登録します')
+        .addStringOption(option =>
+          option.setName('type')
+            .setDescription('受け取る情報の種類')
+            .setRequired(true)
+            .addChoices(...infoTypeChoices)))
+    .addSubcommand(sub =>
+      sub.setName('del')
+        .setDescription('実行したチャンネルの受信設定を解除します')
+        .addStringOption(option =>
+          option.setName('type')
+            .setDescription('解除する情報の種類')
+            .setRequired(true)
+            .addChoices(...infoTypeChoices)))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  // /channel_check
+  new SlashCommandBuilder()
+    .setName('channel_check')
+    .setDescription('どの情報を受信するように設定されているかを表示します'),
+
+  // /shindo_filter [type] [shindo]
+  new SlashCommandBuilder()
+    .setName('shindo_filter')
+    .setDescription('【管理者権限が必要】指定した震度未満の地震情報等を送信しないようにします')
+    .addStringOption(option =>
+      option.setName('type')
+        .setDescription('フィルターを適用する情報種別')
+        .setRequired(true)
         .addChoices(
           { name: '地震情報', value: '地震情報' },
-          { name: '津波情報', value: '津波情報' },
-          { name: '天気予報 [18:00 / 6:00 / 12:00]', value: '天気予報' },
-          { name: '線状降水帯', value: '線状降水帯' },
-          { name: 'にゅうす', value: 'にゅうす' }
+          { name: '緊急地震速報', value: '緊急地震速報' }
+        ))
+    .addStringOption(option =>
+      option.setName('shindo')
+        .setDescription('通知する最低震度')
+        .setRequired(true)
+        .addChoices(
+          { name: '震度1以上', value: '震度1以上' },
+          { name: '震度2以上', value: '震度2以上' },
+          { name: '震度3以上', value: '震度3以上' },
+          { name: '震度4以上', value: '震度4以上' },
+          { name: '震度5弱以上', value: '震度5弱以上' },
+          { name: '震度5強以上', value: '震度5強以上' },
+          { name: '震度6弱以上', value: '震度6弱以上' }
         ))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
+  // 天気・防災・その他コマンド
   new SlashCommandBuilder()
     .setName('地域の天気を見る')
     .setDescription('指定した地方と県の天気予報（時間帯別更新）を取得します')
     .addStringOption(option => option.setName('地方').setDescription('地方名（例: 関東, 関西）').setRequired(true))
     .addStringOption(option => option.setName('県').setDescription('都道府県名（例: 東京都, 大阪府）').setRequired(true)),
-  
+
   new SlashCommandBuilder().setName('earthquake').setDescription('直近の地震・震度情報を取得します'),
   new SlashCommandBuilder().setName('tsunami').setDescription('現在の津波警報・注意報の状況を確認します'),
   new SlashCommandBuilder().setName('news').setDescription('最新の主要ニュースを取得します'),
-  
-  new SlashCommandBuilder()
-    .setName('channel')
-    .setDescription('通知チャンネルの設定を行います')
-    .addSubcommand(sub => sub.setName('add').setDescription('実行したチャンネルを通知先として登録します'))
-    .addSubcommand(sub => sub.setName('del').setDescription('登録されている通知先チャンネルを解除します'))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName('channel_check')
-    .setDescription('現在設定されている通知チャンネルやロールの状態を確認します'),
-
-  new SlashCommandBuilder()
-    .setName('add_mention')
-    .setDescription('情報送信時にメンションするロールを追加します')
-    .addRoleOption(option => option.setName('role').setDescription('追加するロール').setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName('del_mention')
-    .setDescription('情報送信時のメンションロール設定を解除します')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName('shindo_filter')
-    .setDescription('指定した震度未満の地震情報を送信しないようにフィルターを設定します')
-    .addStringOption(option =>
-      option.setName('shindo')
-        .setDescription('フィルターする基準震度')
-        .setRequired(true)
-        .addChoices(
-          { name: '震度1以上', value: '1' },
-          { name: '震度3以上', value: '3' },
-          { name: '震度5弱以上', value: '5s' }
-        ))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder().setName('history').setDescription('過去の地震情報を遡って確認します'),
-  new SlashCommandBuilder().setName('test').setDescription('実行したチャンネルにテストメッセージを送信します'),
-  new SlashCommandBuilder().setName('status').setDescription('ボットの動作ステータスを確認します'),
-  new SlashCommandBuilder().setName('thanks').setDescription('ボットへの謝辞を表示します'),
+  new SlashCommandBuilder().setName('history').setDescription('過去の地震情報を最大25件まで遡って確認できます'),
+  new SlashCommandBuilder().setName('test').setDescription('実行したチャンネルに、テストメッセージを送信します'),
+  new SlashCommandBuilder().setName('status').setDescription('動作ステータスを確認できます'),
+  new SlashCommandBuilder().setName('thanks').setDescription('謝辞を表示します'),
   new SlashCommandBuilder().setName('ping').setDescription('ボットの応答速度を測定します'),
-  new SlashCommandBuilder().setName('help').setDescription('利用可能なコマンド一覧を表示します')
+  new SlashCommandBuilder().setName('help').setDescription('困ったときの味方、ヘルプコマンドです')
 ];
 
 // --- 4. 起動時の自動コマンド登録 ---
@@ -203,21 +258,111 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName } = interaction;
+  const config = getGuildConfig(interaction.guildId);
 
+  // /jyouhoutouroku
   if (commandName === 'jyouhoutouroku') {
     const channel = interaction.options.getChannel('登録チャンネル');
-    const infoType = interaction.options.getString('何を登録するか');
+    const type = interaction.options.getString('何を登録するか');
 
-    registeredInfoChannels.set(interaction.guildId, {
-      channelId: channel.id,
-      infoType: infoType
-    });
+    if (!config[type]) config[type] = {};
+    config[type].channelId = channel.id;
 
     await interaction.reply({
-      content: `✅ ${channel} に **[ ${infoType} ]** の自動通知登録が完了しました！`,
+      content: `✅ ${channel} に **[ ${type} ]** の通知を登録しました！`,
       ephemeral: true
     });
   }
+
+  // /add_mention [type] [roles]
+  else if (commandName === 'add_mention') {
+    const type = interaction.options.getString('type');
+    const role = interaction.options.getRole('roles');
+
+    if (!config[type]) config[type] = {};
+    config[type].roleId = role.id;
+
+    await interaction.reply({
+      content: `✅ **[ ${type} ]** の送信時に **${role.name}** をメンションするよう設定しました。`,
+      ephemeral: true
+    });
+  }
+
+  // /del_mention [type]
+  else if (commandName === 'del_mention') {
+    const type = interaction.options.getString('type');
+
+    if (config[type]) {
+      delete config[type].roleId;
+    }
+
+    await interaction.reply({
+      content: `✅ **[ ${type} ]** のメンション設定を解除しました。`,
+      ephemeral: true
+    });
+  }
+
+  // /channel add [type] & /channel del [type]
+  else if (commandName === 'channel') {
+    const sub = interaction.options.getSubcommand();
+    const type = interaction.options.getString('type');
+
+    if (sub === 'add') {
+      if (!config[type]) config[type] = {};
+      config[type].channelId = interaction.channelId;
+
+      await interaction.reply({
+        content: `✅ このチャンネル (${interaction.channel}) を **[ ${type} ]** の受信チャンネルとして登録しました。`,
+        ephemeral: true
+      });
+    } else if (sub === 'del') {
+      if (config[type]) {
+        delete config[type].channelId;
+      }
+
+      await interaction.reply({
+        content: `✅ このチャンネルの **[ ${type} ]** 受信設定を解除しました。`,
+        ephemeral: true
+      });
+    }
+  }
+
+  // /channel_check
+  else if (commandName === 'channel_check') {
+    const entries = Object.entries(config);
+    if (entries.length === 0) {
+      await interaction.reply({ content: '📊 現在、受信設定されている情報はありません。', ephemeral: true });
+      return;
+    }
+
+    const lines = entries.map(([type, data]) => {
+      const ch = data.channelId ? `<#${data.channelId}>` : '未設定';
+      const rl = data.roleId ? `<@&${data.roleId}>` : 'なし';
+      const fl = data.shindo ? ` (${data.shindo})` : '';
+      return `・**${type}**: チャンネル ${ch} / メンション ${rl}${fl}`;
+    });
+
+    await interaction.reply({
+      content: `📊 **現在の受信設定一覧**\n${lines.join('\n')}`,
+      ephemeral: true
+    });
+  }
+
+  // /shindo_filter [type] [shindo]
+  else if (commandName === 'shindo_filter') {
+    const type = interaction.options.getString('type');
+    const shindo = interaction.options.getString('shindo');
+
+    if (!config[type]) config[type] = {};
+    config[type].shindo = shindo;
+
+    await interaction.reply({
+      content: `✅ **[ ${type} ]** の通知フィルターを **${shindo}** に設定しました。`,
+      ephemeral: true
+    });
+  }
+
+  // /地域の天気を見る
   else if (commandName === '地域の天気を見る') {
     const region = interaction.options.getString('地方');
     const prefecture = interaction.options.getString('県');
@@ -238,6 +383,8 @@ client.on('interactionCreate', async interaction => {
 
     await interaction.editReply({ embeds: [embed] });
   }
+
+  // その他コマンド群
   else if (commandName === 'earthquake') {
     const embed = new EmbedBuilder()
       .setTitle('🚨 最新の地震情報')
@@ -271,48 +418,17 @@ client.on('interactionCreate', async interaction => {
       .setTimestamp();
     await interaction.reply({ embeds: [embed] });
   }
-  else if (commandName === 'channel') {
-    const sub = interaction.options.getSubcommand();
-    if (sub === 'add') {
-      await interaction.reply({ content: `✅ このチャンネル (${interaction.channel}) を通知先に設定しました。`, ephemeral: true });
-    } else if (sub === 'del') {
-      await interaction.reply({ content: `✅ 通知先チャンネルの登録を解除しました。`, ephemeral: true });
-    }
-  }
-  else if (commandName === 'channel_check') {
-    const reg = registeredInfoChannels.get(interaction.guildId);
-    const roleId = alertRoles.get(interaction.guildId);
-    const filter = shindoFilters.get(interaction.guildId) || 'なし';
-    await interaction.reply({
-      content: `📊 **現在の通知設定**\n- 登録情報・チャンネル: ${reg ? `<#${reg.channelId}> (${reg.infoType})` : '未登録'}\n- 通知ロール: ${roleId ? `<@&${roleId}>` : '未設定'}\n- 震度フィルター: ${filter}`,
-      ephemeral: true
-    });
-  }
-  else if (commandName === 'add_mention') {
-    const role = interaction.options.getRole('role');
-    alertRoles.set(interaction.guildId, role.id);
-    await interaction.reply({ content: `✅ 通知時メンションロールを **${role.name}** に設定しました。`, ephemeral: true });
-  }
-  else if (commandName === 'del_mention') {
-    alertRoles.delete(interaction.guildId);
-    await interaction.reply({ content: `✅ メンションロールの設定を解除しました。`, ephemeral: true });
-  }
-  else if (commandName === 'shindo_filter') {
-    const shindo = interaction.options.getString('shindo');
-    shindoFilters.set(interaction.guildId, shindo);
-    await interaction.reply({ content: `✅ 震度フィルターを「${shindo}」に設定しました。`, ephemeral: true });
-  }
   else if (commandName === 'history') {
-    await interaction.reply({ content: '📜 過去の地震履歴データはありません。', ephemeral: true });
+    await interaction.reply({ content: '📜 過去の地震情報履歴（最大25件）の記録はまだありません。', ephemeral: true });
   }
   else if (commandName === 'test') {
-    await interaction.reply({ content: '🧪 テスト通知です。システムは正常に稼働しています。' });
+    await interaction.reply({ content: '🧪 テストメッセージです。EarthQuickly 1号機の通知システムは正常に稼働しています。' });
   }
   else if (commandName === 'status') {
-    await interaction.reply({ content: '🟢 ボットは正常に稼働中です（120項目のダッシュボード項目有効）。', ephemeral: true });
+    await interaction.reply({ content: '🟢 動作ステータス: 正常稼働中（120項目のダッシュボード・24時間Ping対応）', ephemeral: true });
   }
   else if (commandName === 'thanks') {
-    await interaction.reply({ content: '🙏 ご利用いただきありがとうございます！', ephemeral: true });
+    await interaction.reply({ content: '🙏 EarthQuickly 1号機をご利用いただきありがとうございます！', ephemeral: true });
   }
   else if (commandName === 'ping') {
     const latency = Date.now() - interaction.createdTimestamp;
@@ -320,7 +436,7 @@ client.on('interactionCreate', async interaction => {
   }
   else if (commandName === 'help') {
     await interaction.reply({
-      content: '📌 **コマンド一覧**\n`/jyouhoutouroku` - 情報ごとの通知登録\n`/地域の天気を見る` / `/earthquake` / `/tsunami` / `/news`\n`/channel` / `/channel_check` / `/add_mention` / `/shindo_filter` / `/ping` など',
+      content: '📌 **EarthQuickly 1号機 コマンド一覧**\n`/channel add [type]` / `/channel del [type]` / `/channel_check`\n`/add_mention [type] [roles]` / `/del_mention [type]`\n`/shindo_filter [type] [shindo]` / `/jyouhoutouroku`\n`/地域の天気を見る` / `/earthquake` / `/tsunami` / `/news`\n`/history` / `/test` / `/status` / `/thanks` / `/ping`',
       ephemeral: true
     });
   }
