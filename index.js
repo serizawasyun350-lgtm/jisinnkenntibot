@@ -38,7 +38,13 @@ console.warn = (...args) => { captureLog('warn', args); originalWarn(...args); }
 // --- 1. Express サーバー & パスワード保護付きダッシュボード構築 ---
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '1234'; // 環境変数がない場合の初期パスワード
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '1234';
+
+// ボットの稼働モード管理 ('online' または 'maintenance')
+let botStatusMode = 'online';
+
+// POSTデータ受信用パルサー
+app.use(express.urlencoded({ extended: true }));
 
 // 簡易Basic認証ミドルウェア
 function checkAuth(req, res, next) {
@@ -60,13 +66,15 @@ function checkAuth(req, res, next) {
   return res.status(401).send('パスワードが間違っています。');
 }
 
+// ダッシュボード画面表示
 app.get('/', checkAuth, (req, res) => {
   const memoryUsage = process.memoryUsage();
   const heapUsedMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
   const heapTotalMB = Math.round(memoryUsage.heapTotal / 1024 / 1024);
   const rssMB = Math.round(memoryUsage.rss / 1024 / 1024);
   const wsPing = client.ws.ping >= 0 ? `${client.ws.ping}ms` : '測定中...';
-  const isOnline = client.isReady() ? 'オンライン (稼働中)' : 'オフライン';
+  
+  const statusText = botStatusMode === 'maintenance' ? '🟡 点検中 (Maintenance)' : '🟢 オンライン (稼働中)';
 
   res.send(`
   <!DOCTYPE html>
@@ -81,7 +89,7 @@ app.get('/', checkAuth, (req, res) => {
           .card { background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid #334155; margin-bottom: 20px; }
           h1 { color: #38bdf8; font-size: 24px; margin-bottom: 5px; text-align: center; }
           .subtitle { text-align: center; color: #94a3b8; font-size: 14px; margin-bottom: 20px; }
-          .status-badge { display: inline-block; padding: 6px 14px; background: #065f46; color: #34d399; border-radius: 20px; font-weight: bold; font-size: 14px; }
+          .status-badge { display: inline-block; padding: 6px 14px; background: ${botStatusMode === 'maintenance' ? '#854d0e' : '#065f46'}; color: ${botStatusMode === 'maintenance' ? '#fde047' : '#34d399'}; border-radius: 20px; font-weight: bold; font-size: 14px; }
           .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px; }
           .metric-box { background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid #334155; text-align: center; }
           .metric-box h3 { margin: 0 0 8px 0; color: #94a3b8; font-size: 13px; }
@@ -90,8 +98,9 @@ app.get('/', checkAuth, (req, res) => {
           .services-table th, .services-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #334155; font-size: 13px; }
           .services-table th { color: #94a3b8; background: #0f172a; }
           .badge-ok { color: #34d399; font-weight: bold; }
+          .badge-maint { color: #fde047; font-weight: bold; }
           .logs-container { background: #090d16; padding: 15px; border-radius: 8px; border: 1px solid #334155; font-family: monospace; font-size: 12px; max-height: 220px; overflow-y: auto; color: #38bdf8; }
-          .btn { display: inline-block; background: #0284c7; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; transition: background 0.2s; text-align: center; }
+          .btn { display: inline-block; background: #0284c7; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; transition: background 0.2s; text-align: center; border: none; cursor: pointer; }
           .btn:hover { background: #0369a1; }
           .center { text-align: center; }
       </style>
@@ -101,9 +110,21 @@ app.get('/', checkAuth, (req, res) => {
           <div class="card">
               <h1>EarthQuickly 1号機 ダッシュボード</h1>
               <div class="subtitle">パスワード保護済・防災リアルタイム自動配信システム ＆ 統合メトリクス監視</div>
-              <div class="center"><div class="status-badge">● ${isOnline}</div></div>
+              <div class="center"><div class="status-badge">● ${statusText}</div></div>
 
-              <div class="grid" style="margin-top: 25px;">
+              <!-- ダッシュボードからのステータス切替フォーム -->
+              <div style="margin-top: 20px; padding: 15px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-size: 14px; font-weight: bold; color: #38bdf8;">⚙️ Webからのステータス切替</span>
+                  <form action="/set-mode" method="POST" style="display: flex; gap: 10px; align-items: center; margin: 0;">
+                      <select name="mode" style="background: #1e293b; color: #f8fafc; padding: 8px; border-radius: 6px; border: 1px solid #334155;">
+                          <option value="online" ${botStatusMode === 'online' ? 'selected' : ''}>🟢 オンライン (稼働中)</option>
+                          <option value="maintenance" ${botStatusMode === 'maintenance' ? 'selected' : ''}>🟡 点検中 (Maintenance)</option>
+                      </select>
+                      <button type="submit" class="btn" style="padding: 8px 15px; font-size: 13px;">適用</button>
+                  </form>
+              </div>
+
+              <div class="grid" style="margin-top: 20px;">
                   <div class="metric-box">
                       <h3>WebSocket Ping</h3>
                       <div class="value">${wsPing}</div>
@@ -129,7 +150,7 @@ app.get('/', checkAuth, (req, res) => {
                   <tr><td>お天気API (tsukumi)</td><td>weather.tsukumijima.net</td><td><span class="badge-ok">● 稼働中 (応答200)</span></td></tr>
                   <tr><td>気象庁防災情報API</td><td>www.jma.go.jp/bosai</td><td><span class="badge-ok">● 同期中</span></td></tr>
                   <tr><td>NHK / Yahoo! ニュースRSS</td><td>www3.nhk.or.jp / news.yahoo.co.jp</td><td><span class="badge-ok">● 取得可能</span></td></tr>
-                  <tr><td>Express Webサーバー</td><td>Port: ${PORT} (認証保護中)</td><td><span class="badge-ok">● 24時間常時稼働</span></td></tr>
+                  <tr><td>Express Webサーバー</td><td>Port: ${PORT} (認証保護中)</td><td><span class="${botStatusMode === 'maintenance' ? 'badge-maint' : 'badge-ok'}">● ${statusText}</span></td></tr>
               </table>
 
               <h2 style="font-size: 16px; color: #38bdf8; margin-top: 25px;">💻 ライブ コンソールログ</h2>
@@ -146,6 +167,16 @@ app.get('/', checkAuth, (req, res) => {
   </body>
   </html>
   `);
+});
+
+// Webからのモード変更受付エンドポイント
+app.post('/set-mode', checkAuth, (req, res) => {
+  const newMode = req.body.mode;
+  if (newMode === 'online' || newMode === 'maintenance') {
+    botStatusMode = newMode;
+    console.log(`[ダッシュボード操作] ステータスモードが変更されました: ${botStatusMode}`);
+  }
+  res.redirect('/');
 });
 
 app.get('/ping', (req, res) => {
@@ -381,6 +412,19 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
+    .setName('set_status')
+    .setDescription('【管理者限定】ボットのステータスモードを切り替えます')
+    .addStringOption(option =>
+      option.setName('mode')
+        .setDescription('ステータスを選択')
+        .setRequired(true)
+        .addChoices(
+          { name: '🟢 オンライン (稼働中)', value: 'online' },
+          { name: '🟡 点検中 (Maintenance)', value: 'maintenance' }
+        ))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
     .setName('news')
     .setDescription('指定地域周辺の最新ニュース（最大12ページ・< >ボタン切り替え）を閲覧します')
     .addStringOption(option => option.setName('地方').setDescription('地方グループ').setRequired(true).addChoices(...regionChoices))
@@ -409,7 +453,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('channel')
-    .setDescription('【管理者権限が必要】情報を受け取るチャンネルの設定を行います')
+    .setDescription('【管理者権限が必要】情報受け取るチャンネルの設定を行います')
     .addSubcommand(sub =>
       sub.setName('add')
         .setDescription('実行したチャンネルを登録します')
@@ -525,11 +569,13 @@ client.on('interactionCreate', async interaction => {
       const memoryUsage = process.memoryUsage();
       const heapMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
       const totalMB = Math.round(memoryUsage.rss / 1024 / 1024);
+      const currentModeText = botStatusMode === 'maintenance' ? '🟡 点検中 (Maintenance)' : '🟢 オンライン (稼働中)';
 
       const embed = new EmbedBuilder()
         .setTitle('🛠️ EarthQuickly デバッグ診断パネル')
         .setDescription('システム全体の稼働状態・メモリ・API接続状況の診断結果です。')
         .addFields(
+          { name: '⚙️ 現在のステータスモード', value: currentModeText, inline: false },
           { name: '🟢 ボットステータス', value: `接続済み (${client.user.tag})`, inline: true },
           { name: '🏓 WebSocket Ping', value: `${Math.round(client.ws.ping)}ms`, inline: true },
           { name: '💾 メモリ使用量 (Heap / RSS)', value: `${heapMB} MB / ${totalMB} MB`, inline: false },
@@ -537,10 +583,18 @@ client.on('interactionCreate', async interaction => {
           { name: '⚙️ ギルド設定マップ数', value: `${guildSettings.size} 件`, inline: true },
           { name: '🌐 Webサーバー・ダッシュボード', value: `ポート ${PORT} で稼働中 (パスワード保護有効)`, inline: false }
         )
-        .setColor(0x3B82F6)
+        .setColor(botStatusMode === 'maintenance' ? 0xEAB308 : 0x3B82F6)
         .setTimestamp();
 
       await interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+    else if (commandName === 'set_status') {
+      const newMode = interaction.options.getString('mode');
+      botStatusMode = newMode;
+      const modeName = newMode === 'maintenance' ? '🟡 点検中 (Maintenance)' : '🟢 オンライン (稼働中)';
+      
+      console.log(`[ステータス変更] ボットのモードが変更されました: ${modeName}`);
+      await interaction.reply({ content: `✅ ボットのステータスモードを **${modeName}** に変更しました。`, ephemeral: true });
     }
     else if (commandName === 'news' || commandName === 'にゅうす') {
       const prefecture = interaction.options.getString('県');
@@ -660,7 +714,8 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply({ content: '🧪 テスト通知です。システムは正常に稼働しています。' });
     }
     else if (commandName === 'status') {
-      await interaction.reply({ content: '🟢 ボットは正常に稼働中です。', ephemeral: true });
+      const statusMessage = botStatusMode === 'maintenance' ? '🟡 現在、システムは【点検中】です。' : '🟢 ボットは正常に稼働中です。';
+      await interaction.reply({ content: statusMessage, ephemeral: true });
     }
     else if (commandName === 'thanks') {
       await interaction.reply({ content: '🙏 ご利用ありがとうございます！', ephemeral: true });
@@ -670,7 +725,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply(`🏓 Pong! 応答速度: ${latency}ms`);
     }
     else if (commandName === 'help') {
-      await interaction.reply({ content: '📌 利用可能なコマンド: /debug, /news (/にゅうす), /お天気確認, /地震情報, /確認コマンド 等', ephemeral: true });
+      await interaction.reply({ content: '📌 利用可能なコマンド: /set_status, /debug, /news (/にゅうす), /お天気確認, /地震情報 等', ephemeral: true });
     }
   } catch (err) {
     console.error('コマンド実行エラー:', err);
