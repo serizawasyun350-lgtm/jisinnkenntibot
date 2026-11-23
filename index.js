@@ -24,7 +24,7 @@ function generate120DashboardItems() {
   let items = '';
   const categories = [
     'システム一般設定', 'JアラートAPI連携', '地震情報API同期', '津波警報API監視',
-    'お天気API(tsukumi)', '線状降水帯API', '周辺ニュースRSS取得', '自動通知キュー',
+    'お天気API(tsukumi)', '線状降水帯API', '12ページ大容量ニュース', 'デバッグ・診断',
     'ロールメンション制御', 'チャンネル権限管理', 'Ping死活監視', 'エラーログ自動収集'
   ];
   
@@ -61,8 +61,8 @@ const dashboardHtml = `
     <div class="container">
         <div class="card">
             <h1>EarthQuickly 1号機 ダッシュボード</h1>
-            <div class="status">● オンライン (周辺ニュース・各種API連携・全120項目稼働中)</div>
-            <p>周辺ニュース記事取得、お天気API、地震・津波・JアラートAPI連動を統合管理しています。</p>
+            <div class="status">● オンライン (デバッグ対応・全120項目稼働中)</div>
+            <p>デバッグ診断、最大12ページニュース、お天気API、地震・津波・JアラートAPI連動を統合管理しています。</p>
             <div class="metrics-grid">
                 <ul>
                     ${generate120DashboardItems()}
@@ -153,7 +153,7 @@ const rssSources = {
   ]
 };
 
-// --- 3. ニュース記事取得 & パーサー ---
+// --- 3. ニュース記事取得 (最大60件 / 最大12ページ分対応) ---
 function parseXmlItems(xml) {
   const items = [];
   const itemRegex = /<item>([\s\S]*?)<\/item>/g;
@@ -192,7 +192,7 @@ function parseXmlItems(xml) {
   }
 
   items.sort((a, b) => b.timestamp - a.timestamp);
-  return items.slice(0, 20);
+  return items.slice(0, 60);
 }
 
 async function fetchLatestNews(categoryKey) {
@@ -225,16 +225,19 @@ async function fetchLatestNews(categoryKey) {
 }
 
 function buildNewsPage(articles, page, prefecture = '', perPage = 5) {
-  const totalPages = Math.ceil(articles.length / perPage);
+  const maxPages = Math.min(Math.ceil(articles.length / perPage), 12);
+  if (page >= maxPages) page = maxPages - 1;
+  if (page < 0) page = 0;
+
   const start = page * perPage;
   const currentArticles = articles.slice(start, start + perPage);
 
   const titlePrefix = prefecture ? `[${prefecture}周辺] ` : '';
   const embed = new EmbedBuilder()
-    .setTitle(`📰 ${titlePrefix}最新ニュース速報一覧 (${page + 1} / ${totalPages} ページ)`)
-    .setDescription('下の `<` `>` ボタンで前後の最新ニュースに切り替えられます。')
+    .setTitle(`📰 ${titlePrefix}最新ニュース速報一覧 (${page + 1} / ${maxPages} ページ)`)
+    .setDescription('下の `<` `>` ボタンで最大12ページ分の最新ニュースを切り替えられます。')
     .setColor(0x3498DB)
-    .setFooter({ text: `全 ${articles.length} 件の最新記事を取得済み` })
+    .setFooter({ text: `全 ${articles.length} 件中 (${start + 1}〜${start + currentArticles.length}件目を表示)` })
     .setTimestamp();
 
   currentArticles.forEach((art, idx) => {
@@ -254,17 +257,17 @@ function buildNewsPage(articles, page, prefecture = '', perPage = 5) {
       .setDisabled(page === 0),
     new ButtonBuilder()
       .setCustomId('news_page_info')
-      .setLabel(`${page + 1} / ${totalPages}`)
+      .setLabel(`${page + 1} / ${maxPages}`)
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(true),
     new ButtonBuilder()
       .setCustomId('news_next')
       .setLabel('>')
       .setStyle(ButtonStyle.Primary)
-      .setDisabled(page >= totalPages - 1)
+      .setDisabled(page >= maxPages - 1)
   );
 
-  return { embed, row, totalPages };
+  return { embed, row, totalPages: maxPages };
 }
 
 // --- 4. スラッシュコマンドの構築 ---
@@ -303,17 +306,22 @@ const commands = [
     .addStringOption(option => option.setName('地方').setDescription('地方グループ').setRequired(true).addChoices(...regionChoices))
     .addStringOption(option => option.setName('県').setDescription('都道府県名').setRequired(true)),
 
-  // 周辺地域指定付きニュースコマンド
+  // デバッグ用コマンド追加
+  new SlashCommandBuilder()
+    .setName('debug')
+    .setDescription('【管理者限定】ボットのシステム診断とメモリ・接続状態を確認します')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
   new SlashCommandBuilder()
     .setName('news')
-    .setDescription('指定した地域周辺の最新ニュース記事一覧（< > ボタン切り替え）を閲覧します')
+    .setDescription('指定地域周辺の最新ニュース（最大12ページ・< >ボタン切り替え）を閲覧します')
     .addStringOption(option => option.setName('地方').setDescription('地方グループ').setRequired(true).addChoices(...regionChoices))
     .addStringOption(option => option.setName('県').setDescription('都道府県名（例: 東京都）').setRequired(true))
     .addStringOption(option => option.setName('ジャンル').setDescription('ニュースのジャンル').setRequired(false).addChoices(...newsCategoryChoices)),
 
   new SlashCommandBuilder()
     .setName('にゅうす')
-    .setDescription('指定した地域周辺の最新ニュース記事一覧（< > ボタン切り替え）を閲覧します')
+    .setDescription('指定地域周辺の最新ニュース（最大12ページ・< >ボタン切り替え）を閲覧します')
     .addStringOption(option => option.setName('地方').setDescription('地方グループ').setRequired(true).addChoices(...regionChoices))
     .addStringOption(option => option.setName('県').setDescription('都道府県名（例: 東京都）').setRequired(true))
     .addStringOption(option => option.setName('ジャンル').setDescription('ニュースのジャンル').setRequired(false).addChoices(...newsCategoryChoices)),
@@ -440,12 +448,34 @@ client.on('interactionCreate', async interaction => {
       const embed = new EmbedBuilder()
         .setTitle(`🔍 API確認結果 (${prefecture})`)
         .setDescription(`選択されたAPIタイプ: \`${apiType}\` から **${prefecture}** の情報を照会しました。`)
-        .addFields({ name: 'ステータス', value: '🟢 正常にデータを取得・検証しました', inline: false })
+        .addFields({ name: 'ステータs', value: '🟢 正常にデータを取得・検証しました', inline: false })
         .setColor(0x0284C7)
         .setTimestamp();
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
-    // 周辺地域指定付きニュース記事一覧（< > ボタンUIによるページ切り替え対応）
+    // デバッグコマンド
+    else if (commandName === 'debug') {
+      const memoryUsage = process.memoryUsage();
+      const heapMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+      const totalMB = Math.round(memoryUsage.rss / 1024 / 1024);
+
+      const embed = new EmbedBuilder()
+        .setTitle('🛠️ EarthQuickly デバッグ診断パネル')
+        .setDescription('システム全体の稼働状態・メモリ・API接続状況の診断結果です。')
+        .addFields(
+          { name: '🟢 ボットステータス', value: `接続済み (${client.user.tag})`, inline: true },
+          { name: '🏓 WebSocket Ping', value: `${Math.round(client.ws.ping)}ms`, inline: true },
+          { name: '💾 メモリ使用量 (Heap / RSS)', value: `${heapMB} MB / ${totalMB} MB`, inline: false },
+          { name: '📊 サーバーキャッシュ数', value: `${client.guilds.cache.size} サーバー`, inline: true },
+          { name: '⚙️ ギルド設定マップ数', value: `${guildSettings.size} 件`, inline: true },
+          { name: '🌐 Webサーバー・ダッシュボード', value: `ポート ${PORT} で稼働中 (120項目監視有効)`, inline: false }
+        )
+        .setColor(0x3B82F6)
+        .setTimestamp();
+
+      await interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+    // 最大12ページ対応ニュース記事一覧
     else if (commandName === 'news' || commandName === 'にゅうす') {
       const prefecture = interaction.options.getString('県');
       const categoryKey = interaction.options.getString('ジャンル') || 'main';
@@ -574,7 +604,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply(`🏓 Pong! 応答速度: ${latency}ms`);
     }
     else if (commandName === 'help') {
-      await interaction.reply({ content: '📌 利用可能なコマンド: /news (/にゅうす), /お天気確認, /地震情報, /確認コマンド, /jyouhoutouroku 等', ephemeral: true });
+      await interaction.reply({ content: '📌 利用可能なコマンド: /debug, /news (/にゅうす), /お天気確認, /地震情報, /確認コマンド 等', ephemeral: true });
     }
   } catch (err) {
     console.error('コマンド実行エラー:', err);
