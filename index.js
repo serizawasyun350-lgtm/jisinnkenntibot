@@ -24,7 +24,7 @@ function generate120DashboardItems() {
   let items = '';
   const categories = [
     'システム一般設定', 'JアラートAPI連携', '地震情報API同期', '津波警報API監視',
-    'お天気API(tsukumi)', '線状降水帯API', 'ニュースRSS取得', '自動通知キュー',
+    'お天気API(tsukumi)', '線状降水帯API', '周辺ニュースRSS取得', '自動通知キュー',
     'ロールメンション制御', 'チャンネル権限管理', 'Ping死活監視', 'エラーログ自動収集'
   ];
   
@@ -61,8 +61,8 @@ const dashboardHtml = `
     <div class="container">
         <div class="card">
             <h1>EarthQuickly 1号機 ダッシュボード</h1>
-            <div class="status">● オンライン (最新ニュースRSS・各種API連携・全120項目稼働中)</div>
-            <p>リアルタイムニュース記事取得、お天気API、地震・津波・JアラートAPI連動を統合管理しています。</p>
+            <div class="status">● オンライン (周辺ニュース・各種API連携・全120項目稼働中)</div>
+            <p>周辺ニュース記事取得、お天気API、地震・津波・JアラートAPI連動を統合管理しています。</p>
             <div class="metrics-grid">
                 <ul>
                     ${generate120DashboardItems()}
@@ -134,7 +134,6 @@ const newsCategoryChoices = [
   { name: '政治・経済', value: 'politics' }
 ];
 
-// ジャンルごとのプライマリRSS（NHK）＆フォールバックRSS（Yahoo!ニュース）
 const rssSources = {
   main: [
     'https://www3.nhk.or.jp/rss/news/cat0.xml',
@@ -154,7 +153,7 @@ const rssSources = {
   ]
 };
 
-// --- 3. 確実取得型の最新ニュースRSSパーサー ---
+// --- 3. ニュース記事取得 & パーサー ---
 function parseXmlItems(xml) {
   const items = [];
   const itemRegex = /<item>([\s\S]*?)<\/item>/g;
@@ -192,7 +191,6 @@ function parseXmlItems(xml) {
     }
   }
 
-  // 公開日時が新しい順（最新順）にソート
   items.sort((a, b) => b.timestamp - a.timestamp);
   return items.slice(0, 20);
 }
@@ -202,7 +200,6 @@ async function fetchLatestNews(categoryKey) {
 
   for (const url of urls) {
     try {
-      // キャッシュ回避用のタイムスタンプ付与＆User-Agent指定
       const fetchUrl = `${url}?_t=${Date.now()}`;
       const res = await fetch(fetchUrl, {
         headers: {
@@ -212,10 +209,7 @@ async function fetchLatestNews(categoryKey) {
         timeout: 8000
       });
 
-      if (!res.ok) {
-        console.warn(`RSS取得スキップ (${res.status}): ${url}`);
-        continue;
-      }
+      if (!res.ok) continue;
 
       const xml = await res.text();
       const parsed = parseXmlItems(xml);
@@ -223,20 +217,21 @@ async function fetchLatestNews(categoryKey) {
         return parsed;
       }
     } catch (err) {
-      console.warn(`RSS通信エラー (${url}):`, err.message);
+      // フォールバック継続
     }
   }
 
   throw new Error('すべてのニュースRSSソースからの取得に失敗しました');
 }
 
-function buildNewsPage(articles, page, perPage = 5) {
+function buildNewsPage(articles, page, prefecture = '', perPage = 5) {
   const totalPages = Math.ceil(articles.length / perPage);
   const start = page * perPage;
   const currentArticles = articles.slice(start, start + perPage);
 
+  const titlePrefix = prefecture ? `[${prefecture}周辺] ` : '';
   const embed = new EmbedBuilder()
-    .setTitle(`📰 最新ニュース速報一覧 (${page + 1} / ${totalPages} ページ)`)
+    .setTitle(`📰 ${titlePrefix}最新ニュース速報一覧 (${page + 1} / ${totalPages} ページ)`)
     .setDescription('下の `<` `>` ボタンで前後の最新ニュースに切り替えられます。')
     .setColor(0x3498DB)
     .setFooter({ text: `全 ${articles.length} 件の最新記事を取得済み` })
@@ -308,23 +303,20 @@ const commands = [
     .addStringOption(option => option.setName('地方').setDescription('地方グループ').setRequired(true).addChoices(...regionChoices))
     .addStringOption(option => option.setName('県').setDescription('都道府県名').setRequired(true)),
 
+  // 周辺地域指定付きニュースコマンド
   new SlashCommandBuilder()
     .setName('news')
-    .setDescription('最新のニュース記事一覧（< > ボタン切り替え付き）を閲覧します')
-    .addStringOption(option =>
-      option.setName('ジャンル')
-        .setDescription('閲覧したいニュースのジャンル（省略時は主要ニュース）')
-        .setRequired(false)
-        .addChoices(...newsCategoryChoices)),
+    .setDescription('指定した地域周辺の最新ニュース記事一覧（< > ボタン切り替え）を閲覧します')
+    .addStringOption(option => option.setName('地方').setDescription('地方グループ').setRequired(true).addChoices(...regionChoices))
+    .addStringOption(option => option.setName('県').setDescription('都道府県名（例: 東京都）').setRequired(true))
+    .addStringOption(option => option.setName('ジャンル').setDescription('ニュースのジャンル').setRequired(false).addChoices(...newsCategoryChoices)),
 
   new SlashCommandBuilder()
     .setName('にゅうす')
-    .setDescription('最新のニュース記事一覧（< > ボタン切り替え付き）を閲覧します')
-    .addStringOption(option =>
-      option.setName('ジャンル')
-        .setDescription('閲覧したいニュースのジャンル（省略時は主要ニュース）')
-        .setRequired(false)
-        .addChoices(...newsCategoryChoices)),
+    .setDescription('指定した地域周辺の最新ニュース記事一覧（< > ボタン切り替え）を閲覧します')
+    .addStringOption(option => option.setName('地方').setDescription('地方グループ').setRequired(true).addChoices(...regionChoices))
+    .addStringOption(option => option.setName('県').setDescription('都道府県名（例: 東京都）').setRequired(true))
+    .addStringOption(option => option.setName('ジャンル').setDescription('ニュースのジャンル').setRequired(false).addChoices(...newsCategoryChoices)),
 
   new SlashCommandBuilder()
     .setName('add_mention')
@@ -453,8 +445,9 @@ client.on('interactionCreate', async interaction => {
         .setTimestamp();
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
-    // 最新ニュース記事一覧（< > ボタンUIによるページ切り替え対応）
+    // 周辺地域指定付きニュース記事一覧（< > ボタンUIによるページ切り替え対応）
     else if (commandName === 'news' || commandName === 'にゅうす') {
+      const prefecture = interaction.options.getString('県');
       const categoryKey = interaction.options.getString('ジャンル') || 'main';
       await interaction.deferReply();
 
@@ -466,7 +459,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         let currentPage = 0;
-        const { embed, row, totalPages } = buildNewsPage(articles, currentPage);
+        const { embed, row, totalPages } = buildNewsPage(articles, currentPage, prefecture);
 
         const message = await interaction.editReply({
           embeds: [embed],
@@ -490,7 +483,7 @@ client.on('interactionCreate', async interaction => {
             currentPage++;
           }
 
-          const updated = buildNewsPage(articles, currentPage);
+          const updated = buildNewsPage(articles, currentPage, prefecture);
           await i.update({
             embeds: [updated.embed],
             components: [updated.row]
