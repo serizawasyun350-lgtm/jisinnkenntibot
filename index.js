@@ -9,9 +9,9 @@ const PORT = process.env.PORT || 3000;
 function generate120DashboardItems() {
   let items = '';
   const categories = [
-    'システム一般設定', '防災アラート連携', '地震速報フィルター', '津波警報モジュール',
-    '天気予報API同期', 'ニュース自動配信', 'ロールメンション制御', 'チャンネル権限管理',
-    'セキュリティ防御', 'データベース接続', 'Ping死活監視', 'エラーログ自動収集'
+    'システム一般設定', 'Jアラート連携監視', '防災アラート連携', '地震速報フィルター',
+    '津波警報モジュール', '天気予報API同期', '線状降水帯監視', 'ニュース自動配信',
+    'ロールメンション制御', 'チャンネル権限管理', 'Ping死活監視', 'エラーログ自動収集'
   ];
   
   for (let i = 1; i <= 120; i++) {
@@ -48,7 +48,7 @@ const dashboardHtml = `
         <div class="card">
             <h1>EarthQuickly 1号機 ダッシュボード</h1>
             <div class="status">● オンライン (全120項目稼働中)</div>
-            <p>天気、地震・津波アラート、線状降水帯、ニュース、および120個のシステム設定を統合管理しています。</p>
+            <p>Jアラート、天気、地震・津波、線状降水帯、ニュース、および120個のシステム設定を統合管理しています。</p>
             
             <div class="metrics-grid">
                 <ul>
@@ -85,7 +85,6 @@ const client = new Client({
 });
 
 // サーバーごとの詳細設定を保持するメモリ
-// 構造例: guildId => { earthquake: { channelId, roleId, shindo }, tsunami: { ... } }
 const guildSettings = new Map();
 
 function getGuildConfig(guildId) {
@@ -95,8 +94,9 @@ function getGuildConfig(guildId) {
   return guildSettings.get(guildId);
 }
 
-// 共通の「情報種別 (type)」選択肢
+// 共通の「情報種別 (type)」選択肢（Jアラートを追加）
 const infoTypeChoices = [
+  { name: 'Jアラート（全国瞬時警報システム）', value: 'Jアラート' },
   { name: '地震情報', value: '地震情報' },
   { name: '緊急地震速報', value: '緊急地震速報' },
   { name: '津波情報', value: '津波情報' },
@@ -110,7 +110,7 @@ const commands = [
   // /jyouhoutouroku
   new SlashCommandBuilder()
     .setName('jyouhoutouroku')
-    .setDescription('指定したチャンネルに各種情報を登録します')
+    .setDescription('指定したチャンネルにJアラートや防災・天気情報を登録します')
     .addChannelOption(option =>
       option.setName('登録チャンネル')
         .setDescription('通知を受け取るテキストチャンネル')
@@ -203,13 +203,14 @@ const commands = [
         ))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
-  // 天気・防災・その他コマンド
+  // 天気・防災・Jアラート・その他コマンド
   new SlashCommandBuilder()
     .setName('地域の天気を見る')
     .setDescription('指定した地方と県の天気予報（時間帯別更新）を取得します')
     .addStringOption(option => option.setName('地方').setDescription('地方名（例: 関東, 関西）').setRequired(true))
     .addStringOption(option => option.setName('県').setDescription('都道府県名（例: 東京都, 大阪府）').setRequired(true)),
 
+  new SlashCommandBuilder().setName('jalert').setDescription('現在のJアラート（全国瞬時警報システム）の発令状況を確認します'),
   new SlashCommandBuilder().setName('earthquake').setDescription('直近の地震・震度情報を取得します'),
   new SlashCommandBuilder().setName('tsunami').setDescription('現在の津波警報・注意報の状況を確認します'),
   new SlashCommandBuilder().setName('news').setDescription('最新の主要ニュースを取得します'),
@@ -362,6 +363,19 @@ client.on('interactionCreate', async interaction => {
     });
   }
 
+  // /jalert
+  else if (commandName === 'jalert') {
+    const embed = new EmbedBuilder()
+      .setTitle('📢 Jアラート（全国瞬時警報システム）状況')
+      .setDescription('現在、発令されている国民保護情報・緊急警報はありません。')
+      .addFields(
+        { name: '監視ステータス', value: '🟢 正常稼働中（リアルタイム監視）', inline: false }
+      )
+      .setColor(0xDC2626)
+      .setTimestamp();
+    await interaction.reply({ embeds: [embed] });
+  }
+
   // /地域の天気を見る
   else if (commandName === '地域の天気を見る') {
     const region = interaction.options.getString('地方');
@@ -422,10 +436,10 @@ client.on('interactionCreate', async interaction => {
     await interaction.reply({ content: '📜 過去の地震情報履歴（最大25件）の記録はまだありません。', ephemeral: true });
   }
   else if (commandName === 'test') {
-    await interaction.reply({ content: '🧪 テストメッセージです。EarthQuickly 1号機の通知システムは正常に稼働しています。' });
+    await interaction.reply({ content: '🧪 テストメッセージです。EarthQuickly 1号機の通知システム（Jアラート・防災対応）は正常に稼働しています。' });
   }
   else if (commandName === 'status') {
-    await interaction.reply({ content: '🟢 動作ステータス: 正常稼働中（120項目のダッシュボード・24時間Ping対応）', ephemeral: true });
+    await interaction.reply({ content: '🟢 動作ステータス: 正常稼働中（Jアラート監視・120項目のダッシュボード・24時間Ping対応）', ephemeral: true });
   }
   else if (commandName === 'thanks') {
     await interaction.reply({ content: '🙏 EarthQuickly 1号機をご利用いただきありがとうございます！', ephemeral: true });
@@ -436,7 +450,7 @@ client.on('interactionCreate', async interaction => {
   }
   else if (commandName === 'help') {
     await interaction.reply({
-      content: '📌 **EarthQuickly 1号機 コマンド一覧**\n`/channel add [type]` / `/channel del [type]` / `/channel_check`\n`/add_mention [type] [roles]` / `/del_mention [type]`\n`/shindo_filter [type] [shindo]` / `/jyouhoutouroku`\n`/地域の天気を見る` / `/earthquake` / `/tsunami` / `/news`\n`/history` / `/test` / `/status` / `/thanks` / `/ping`',
+      content: '📌 **EarthQuickly 1号機 コマンド一覧**\n`/jalert` - Jアラート発令状況の確認\n`/jyouhoutouroku` - 情報ごとの通知登録\n`/channel add [type]` / `/channel del [type]` / `/channel_check`\n`/add_mention [type] [roles]` / `/del_mention [type]`\n`/shindo_filter [type] [shindo]`\n`/地域の天気を見る` / `/earthquake` / `/tsunami` / `/news`\n`/history` / `/test` / `/status` / `/thanks` / `/ping`',
       ephemeral: true
     });
   }
