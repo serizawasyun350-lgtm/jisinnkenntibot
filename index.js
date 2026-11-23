@@ -48,7 +48,7 @@ const dashboardHtml = `
         <div class="card">
             <h1>EarthQuickly 1号機 ダッシュボード</h1>
             <div class="status">● オンライン (全120項目稼働中)</div>
-            <p>天気、地震・津波アラート、および120個のシステム設定・ステータスを統合管理しています。</p>
+            <p>天気、地震・津波アラート、線状降水帯、ニュース、および120個のシステム設定を統合管理しています。</p>
             
             <div class="metrics-grid">
                 <ul>
@@ -84,13 +84,34 @@ const client = new Client({
   ],
 });
 
-// サーバーごとの設定メモリ
-const alertChannels = new Map();
+// サーバーごとの登録情報を保持するメモリ
+const registeredInfoChannels = new Map(); // guildId => { channelId, infoTypes }
 const alertRoles = new Map();
 const shindoFilters = new Map();
 
 // --- 3. スラッシュコマンドの構築 ---
 const commands = [
+  new SlashCommandBuilder()
+    .setName('jyouhoutouroku')
+    .setDescription('指定したチャンネルに地震・津波・天気予報などの各種情報を登録します')
+    .addChannelOption(option =>
+      option.setName('登録チャンネル')
+        .setDescription('通知を受け取るテキストチャンネル')
+        .addChannelTypes(ChannelType.GuildText)
+        .setRequired(true))
+    .addStringOption(option =>
+      option.setName('何を登録するか')
+        .setDescription('登録する情報の種類')
+        .setRequired(true)
+        .addChoices(
+          { name: '地震情報', value: '地震情報' },
+          { name: '津波情報', value: '津波情報' },
+          { name: '天気予報 [18:00 / 6:00 / 12:00]', value: '天気予報' },
+          { name: '線状降水帯', value: '線状降水帯' },
+          { name: 'にゅうす', value: 'にゅうす' }
+        ))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
   new SlashCommandBuilder()
     .setName('地域の天気を見る')
     .setDescription('指定した地方と県の天気予報（時間帯別更新）を取得します')
@@ -183,7 +204,21 @@ client.on('interactionCreate', async interaction => {
 
   const { commandName } = interaction;
 
-  if (commandName === '地域の天気を見る') {
+  if (commandName === 'jyouhoutouroku') {
+    const channel = interaction.options.getChannel('登録チャンネル');
+    const infoType = interaction.options.getString('何を登録するか');
+
+    registeredInfoChannels.set(interaction.guildId, {
+      channelId: channel.id,
+      infoType: infoType
+    });
+
+    await interaction.reply({
+      content: `✅ ${channel} に **[ ${infoType} ]** の自動通知登録が完了しました！`,
+      ephemeral: true
+    });
+  }
+  else if (commandName === '地域の天気を見る') {
     const region = interaction.options.getString('地方');
     const prefecture = interaction.options.getString('県');
     await interaction.deferReply();
@@ -239,19 +274,17 @@ client.on('interactionCreate', async interaction => {
   else if (commandName === 'channel') {
     const sub = interaction.options.getSubcommand();
     if (sub === 'add') {
-      alertChannels.set(interaction.guildId, interaction.channelId);
-      await interaction.reply({ content: `✅ このチャンネル (${interaction.channel}) を防災情報の通知先に設定しました。`, ephemeral: true });
+      await interaction.reply({ content: `✅ このチャンネル (${interaction.channel}) を通知先に設定しました。`, ephemeral: true });
     } else if (sub === 'del') {
-      alertChannels.delete(interaction.guildId);
       await interaction.reply({ content: `✅ 通知先チャンネルの登録を解除しました。`, ephemeral: true });
     }
   }
   else if (commandName === 'channel_check') {
-    const chId = alertChannels.get(interaction.guildId);
+    const reg = registeredInfoChannels.get(interaction.guildId);
     const roleId = alertRoles.get(interaction.guildId);
     const filter = shindoFilters.get(interaction.guildId) || 'なし';
     await interaction.reply({
-      content: `📊 **現在の通知設定**\n- 通知チャンネル: ${chId ? `<#${chId}>` : '未設定'}\n- 通知ロール: ${roleId ? `<@&${roleId}>` : '未設定'}\n- 震度フィルター: ${filter}`,
+      content: `📊 **現在の通知設定**\n- 登録情報・チャンネル: ${reg ? `<#${reg.channelId}> (${reg.infoType})` : '未登録'}\n- 通知ロール: ${roleId ? `<@&${roleId}>` : '未設定'}\n- 震度フィルター: ${filter}`,
       ephemeral: true
     });
   }
@@ -273,7 +306,7 @@ client.on('interactionCreate', async interaction => {
     await interaction.reply({ content: '📜 過去の地震履歴データはありません。', ephemeral: true });
   }
   else if (commandName === 'test') {
-    await interaction.reply({ content: '🧪 テスト通知です。防災アラートシステムは正常に稼働しています。' });
+    await interaction.reply({ content: '🧪 テスト通知です。システムは正常に稼働しています。' });
   }
   else if (commandName === 'status') {
     await interaction.reply({ content: '🟢 ボットは正常に稼働中です（120項目のダッシュボード項目有効）。', ephemeral: true });
@@ -287,7 +320,7 @@ client.on('interactionCreate', async interaction => {
   }
   else if (commandName === 'help') {
     await interaction.reply({
-      content: '📌 **コマンド一覧**\n`/地域の天気を見る` / `/earthquake` / `/tsunami` / `/news`\n`/channel add` / `/channel del` / `/channel_check`\n`/add_mention` / `/del_mention` / `/shindo_filter`\n`/history` / `/test` / `/status` / `/thanks` / `/ping`',
+      content: '📌 **コマンド一覧**\n`/jyouhoutouroku` - 情報ごとの通知登録\n`/地域の天気を見る` / `/earthquake` / `/tsunami` / `/news`\n`/channel` / `/channel_check` / `/add_mention` / `/shindo_filter` / `/ping` など',
       ephemeral: true
     });
   }
